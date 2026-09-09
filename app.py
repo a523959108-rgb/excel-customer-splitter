@@ -418,19 +418,25 @@ class SplitterApp(tk.Tk):
             self.progress.stop()
             self.run_button.configure(state="normal")
             return
+        # Read all Tk variables on the main thread before starting the worker.
+        # Tkinter StringVar.get() is not safe to call from a background thread.
+        task_id = self.task_id
+        output_path = self.output_var.get().strip()
+        region_path = self.region_path_var.get().strip()
+        region_value = self.region_var.get().strip() or None
         threading.Thread(
             target=self._export_worker,
-            args=(selected, customer, self.region_var.get().strip() or None, *date_fields, self.selected_start_date, self.selected_end_date, selected_customers),
+            args=(task_id, output_path, region_path, selected, customer, region_value, *date_fields, self.selected_start_date, self.selected_end_date, selected_customers),
             daemon=True,
         ).start()
 
-    def _export_worker(self, selected, customer, region, year_field, month_field, day_field, start_date, end_date, selected_customers):
+    def _export_worker(self, task_id, output_path, region_path, selected, customer, region, year_field, month_field, day_field, start_date, end_date, selected_customers):
         try:
-            rules = load_region_rules(self.region_path_var.get())
+            rules = load_region_rules(region_path)
             result = export_task(
                 self.store,
-                self.task_id,
-                self.output_var.get(),
+                task_id,
+                output_path,
                 selected,
                 customer,
                 region,
