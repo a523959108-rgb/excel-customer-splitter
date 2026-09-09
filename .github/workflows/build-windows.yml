@@ -1,0 +1,47 @@
+name: Build Windows x64
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python x64
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+          cache: pip
+
+      - name: Build executable
+        shell: pwsh
+        run: .\build_windows.ps1
+
+      - name: Assemble release package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release -Force | Out-Null
+          Copy-Item 'dist/Excel客户拆分.exe' 'release/Excel客户拆分.exe'
+          Copy-Item regions.json release/regions.json
+          if (Test-Path customer_config.json) {
+            Copy-Item customer_config.json release/customer_config.json
+          }
+          Copy-Item README.md release/README.md
+          Compress-Archive -Path release/* -DestinationPath 'ExcelCustomerSplitter-windows-x64.zip' -Force
+
+      - name: Upload executable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExcelCustomerSplitter-windows-x64
+          path: ExcelCustomerSplitter-windows-x64.zip
+          if-no-files-found: error
