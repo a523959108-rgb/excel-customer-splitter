@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
 import uuid
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
+from queue import Queue
 from typing import Callable, Iterable
 
 from openpyxl import Workbook, load_workbook
@@ -127,63 +130,116 @@ class ImportStore:
         paths: list[str | Path],
         progress: Callable[[str], None] | None = None,
         cancel_event: threading.Event | None = None,
+        max_workers: int | None = None,
     ) -> tuple[str, list[str]]:
         with self._lock:
             task_id = uuid.uuid4().hex
             self.connection.execute("INSERT INTO import_task VALUES (?, datetime('now'), 'IMPORTING')", (task_id,))
+            self.connection.commit()
             all_headers: dict[str, str] = {}
             imported_rows = 0
-            try:
-                with self.connection:
-                    for file_index, path_value in enumerate(paths, start=1):
+            if not paths:
+                self.connection.execute("UPDATE import_task SET status='READY' WHERE task_id=?", (task_id,))
+                self.connection.commit()
+                return task_id, []
+            worker_count = max_workers or min(4, len(paths), max(1, os.cpu_count() or 2))
+            worker_count = max(1, min(worker_count, len(paths)))
+            batch_queue: Queue = Queue(maxsize=worker_count * 4)
+            completed_files = 0
+            file_ids: dict[int, int] = {}
+
+            def read_file(file_index: int, path_value: str | Path):
+                path = Path(path_value)
+
+                def put(message):
+                    while True:
                         if cancel_event and cancel_event.is_set():
                             raise ExportCancelled("用户已停止导入任务")
-                        path = Path(path_value)
-                        if progress:
-                            progress(f"读取 {file_index}/{len(paths)}: {path.name}")
-                        wb = load_workbook(path, read_only=True, data_only=True)
                         try:
-                            ws = wb[wb.sheetnames[0]]
-                            header_row = find_header_row(ws)
-                            header_values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))
-                            headers: list[str] = []
-                            for index, value in enumerate(header_values):
-                                display = str(value).strip() if value is not None and str(value).strip() else f"未命名列{index + 1}"
-                                normalized = normalize_field(display)
-                                if not normalized:
-                                    normalized = f"未命名列{index + 1}"
-                                if normalized in headers:
-                                    normalized = f"{normalized}_{index + 1}"
-                                headers.append(normalized)
-                                all_headers.setdefault(normalized, display)
-                            file_id = self.connection.execute(
-                                "INSERT INTO source_file(task_id, file_name, file_path, sheet_name, header_row) VALUES (?, ?, ?, ?, ?)",
-                                (task_id, path.name, str(path), ws.title, header_row),
-                            ).lastrowid
-                            row_batch: list[tuple[str, int, int, str]] = []
-                            for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
-                                if cancel_event and cancel_event.is_set():
-                                    raise ExportCancelled("用户已停止导入任务")
-                                if not any(value is not None and str(value).strip() for value in row):
-                                    continue
-                                imported_rows += 1
-                                data = {headers[index]: json_value(row[index] if index < len(row) else None) for index in range(len(headers))}
-                                row_batch.append((task_id, file_id, row_number, json.dumps(data, ensure_ascii=False)))
-                                if len(row_batch) >= 10000:
-                                    self.connection.executemany(
-                                        "INSERT INTO staging_row(task_id, file_id, source_row, raw_json) VALUES (?, ?, ?, ?)",
-                                        row_batch,
-                                    )
-                                    row_batch.clear()
-                                if progress and imported_rows % 100000 == 0:
-                                    progress(f"已导入 {imported_rows:,} 行...")
-                            if row_batch:
+                            batch_queue.put(message, timeout=0.5)
+                            return
+                        except Exception:
+                            continue
+
+                wb = None
+                try:
+                    wb = load_workbook(path, read_only=True, data_only=True)
+                    ws = wb[wb.sheetnames[0]]
+                    header_row = find_header_row(ws)
+                    header_values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))
+                    headers: list[str] = []
+                    display_headers: list[str] = []
+                    for index, value in enumerate(header_values):
+                        display = str(value).strip() if value is not None and str(value).strip() else f"未命名列{index + 1}"
+                        normalized = normalize_field(display) or f"未命名列{index + 1}"
+                        if normalized in headers:
+                            normalized = f"{normalized}_{index + 1}"
+                        headers.append(normalized)
+                        display_headers.append(display)
+                    put(("file", file_index, path.name, str(path), ws.title, header_row, headers, display_headers))
+                    row_batch: list[tuple[int, str]] = []
+                    for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
+                        if cancel_event and cancel_event.is_set():
+                            raise ExportCancelled("用户已停止导入任务")
+                        if not any(value is not None and str(value).strip() for value in row):
+                            continue
+                        data = {headers[index]: json_value(row[index] if index < len(row) else None) for index in range(len(headers))}
+                        row_batch.append((row_number, json.dumps(data, ensure_ascii=False)))
+                        if len(row_batch) >= 5000:
+                            put(("batch", file_index, row_batch))
+                            row_batch = []
+                    if row_batch:
+                        put(("batch", file_index, row_batch))
+                    put(("done", file_index))
+                except Exception as exc:
+                    try:
+                        batch_queue.put(("error", file_index, exc), timeout=1)
+                    except Exception:
+                        pass
+                finally:
+                    if wb is not None:
+                        wb.close()
+
+            try:
+                with self.connection:
+                    if progress:
+                        progress(f"并行读取 {len(paths)} 个文件（{worker_count} 个读取线程），SQLite 由单写入通道批量写入...")
+                    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="xlsx-reader") as executor:
+                        futures = [executor.submit(read_file, index, path_value) for index, path_value in enumerate(paths, start=1)]
+                        while completed_files < len(paths):
+                            if cancel_event and cancel_event.is_set():
+                                raise ExportCancelled("用户已停止导入任务")
+                            message = batch_queue.get()
+                            kind = message[0]
+                            if kind == "file":
+                                _, file_index, file_name, file_path, sheet_name, header_row, headers, display_headers = message
+                                file_id = self.connection.execute(
+                                    "INSERT INTO source_file(task_id, file_name, file_path, sheet_name, header_row) VALUES (?, ?, ?, ?, ?)",
+                                    (task_id, file_name, file_path, sheet_name, header_row),
+                                ).lastrowid
+                                file_ids[file_index] = file_id
+                                for normalized, display in zip(headers, display_headers):
+                                    all_headers.setdefault(normalized, display)
+                            elif kind == "batch":
+                                _, file_index, rows = message
+                                file_id = file_ids[file_index]
+                                values = [(task_id, file_id, source_row, raw_json) for source_row, raw_json in rows]
                                 self.connection.executemany(
-                                    "INSERT INTO staging_row(task_id, file_id, source_row, raw_json) VALUES (?, ?, ?, ?)",
-                                    row_batch,
+                                    "INSERT INTO staging_row(task_id, file_id, source_row, raw_json) VALUES (?, ?, ?, ?)", values
                                 )
-                        finally:
-                            wb.close()
+                                imported_rows += len(values)
+                                if progress and imported_rows // 100000 != (imported_rows - len(values)) // 100000:
+                                    progress(f"已导入 {imported_rows:,} 行...")
+                            elif kind == "done":
+                                completed_files += 1
+                                if progress:
+                                    progress(f"已读取完成 {completed_files}/{len(paths)} 个文件...")
+                            elif kind == "error":
+                                if cancel_event:
+                                    cancel_event.set()
+                                raise message[2]
+                        for future in futures:
+                            future.result()
                     self.connection.executemany(
                         "INSERT INTO source_column(task_id, display_name, normalized_name) VALUES (?, ?, ?)",
                         [(task_id, display, normalized) for normalized, display in all_headers.items()],
