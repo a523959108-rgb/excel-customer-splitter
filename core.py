@@ -17,6 +17,10 @@ INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
 RESERVED_FILENAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
 
 
+class ExportCancelled(Exception):
+    """Raised when the user requests a cooperative task cancellation."""
+
+
 def normalize_field(value: object) -> str:
     text = "" if value is None else str(value)
     return re.sub(r"\s+", "", text).strip().lower()
@@ -118,7 +122,12 @@ class ImportStore:
         with self._lock:
             self.connection.close()
 
-    def import_files(self, paths: list[str | Path], progress: Callable[[str], None] | None = None) -> tuple[str, list[str]]:
+    def import_files(
+        self,
+        paths: list[str | Path],
+        progress: Callable[[str], None] | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> tuple[str, list[str]]:
         with self._lock:
             task_id = uuid.uuid4().hex
             self.connection.execute("INSERT INTO import_task VALUES (?, datetime('now'), 'IMPORTING')", (task_id,))
@@ -127,6 +136,8 @@ class ImportStore:
             try:
                 with self.connection:
                     for file_index, path_value in enumerate(paths, start=1):
+                        if cancel_event and cancel_event.is_set():
+                            raise ExportCancelled("用户已停止导入任务")
                         path = Path(path_value)
                         if progress:
                             progress(f"读取 {file_index}/{len(paths)}: {path.name}")
@@ -151,6 +162,8 @@ class ImportStore:
                             ).lastrowid
                             row_batch: list[tuple[str, int, int, str]] = []
                             for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
+                                if cancel_event and cancel_event.is_set():
+                                    raise ExportCancelled("用户已停止导入任务")
                                 if not any(value is not None and str(value).strip() for value in row):
                                     continue
                                 imported_rows += 1
@@ -178,6 +191,9 @@ class ImportStore:
                     self.connection.execute("UPDATE import_task SET status='READY' WHERE task_id=?", (task_id,))
                 return task_id, [all_headers[key] for key in all_headers]
             except Exception:
+                self.connection.execute("DELETE FROM staging_row WHERE task_id=?", (task_id,))
+                self.connection.execute("DELETE FROM source_file WHERE task_id=?", (task_id,))
+                self.connection.execute("DELETE FROM source_column WHERE task_id=?", (task_id,))
                 self.connection.execute("UPDATE import_task SET status='FAILED' WHERE task_id=?", (task_id,))
                 self.connection.commit()
                 raise
@@ -308,6 +324,7 @@ def export_task(
     progress: Callable[[str], None] | None = None,
     date_end: str | None = None,
     customer_names: list[str] | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict:
     # Keep the previous API usable for callers that supplied one date field:
     # export_task(..., date_field, region_rules, progress).
@@ -340,6 +357,11 @@ def export_task(
             raise ValueError(f"无效的结束日期：{date_end}") from None
         if selected_date_value and selected_end_value < selected_date_value:
             selected_date_value, selected_end_value = selected_end_value, selected_date_value
+    range_folder = None
+    if selected_date_value:
+        range_folder = selected_date_value.isoformat()
+        if selected_end_value and selected_end_value != selected_date_value:
+            range_folder = f"{range_folder}至{selected_end_value.isoformat()}"
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
     row_count = 0
@@ -367,11 +389,26 @@ def export_task(
         if progress:
             progress(f"已生成 {target_file}")
 
+    def check_cancelled():
+        if cancel_event and cancel_event.is_set():
+            if workbook:
+                try:
+                    workbook.close()
+                except Exception:
+                    pass
+            try:
+                connection.execute("DROP TABLE IF EXISTS temp.export_bucket")
+                connection.commit()
+            except Exception:
+                pass
+            raise ExportCancelled("用户已停止导出任务")
+
     with store._lock:
         connection = store.connection
         connection.execute("DROP TABLE IF EXISTS temp.export_bucket")
         connection.execute("CREATE TEMP TABLE export_bucket (row_id INTEGER PRIMARY KEY, folder_date TEXT NOT NULL, region TEXT NOT NULL, customer TEXT NOT NULL)")
         for row_id, row in store.iter_rows_with_ids(task_id):
+            check_cancelled()
             customer = str(row.get(customer_key) or "").strip() or "未识别客户"
             if customer_filter and normalize_field(customer) not in customer_filter:
                 continue
@@ -379,7 +416,10 @@ def export_task(
             parsed_date = parse_date_parts(row.get(year_key), row.get(month_key), row.get(day_key)) if year_key and month_key and day_key else None
             if selected_date_value and (parsed_date is None or parsed_date < selected_date_value or (selected_end_value and parsed_date > selected_end_value)):
                 continue
-            folder_date = parsed_date.isoformat() if parsed_date else default_date
+            # A selected date range is one filter/group. Keep all matching
+            # days for a customer in the same workbook instead of creating
+            # one date folder per day.
+            folder_date = range_folder or (parsed_date.isoformat() if parsed_date else default_date)
             bucket_batch.append((row_id, folder_date, region, customer))
             row_count += 1
             if len(bucket_batch) >= 10000:
@@ -398,6 +438,7 @@ def export_task(
             "ORDER BY export_bucket.folder_date, export_bucket.region, export_bucket.customer, export_bucket.row_id"
         )
         for folder_date, region, customer, raw_json in cursor:
+            check_cancelled()
             key = (folder_date, region, customer)
             if key != current_key:
                 close_workbook(current_key, workbook, part_number)

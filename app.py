@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from core import ImportStore, available_dates, export_task, load_customer_names, load_region_rules, scan_headers
+from core import ExportCancelled, ImportStore, available_dates, export_task, load_customer_names, load_region_rules, scan_headers
 
 
 BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
@@ -173,6 +173,9 @@ class SplitterApp(tk.Tk):
         self.selected_start_date: str | None = None
         self.selected_end_date: str | None = None
         self.customer_names: list[str] = []
+        self._cancel_event = threading.Event()
+        self._worker_thread: threading.Thread | None = None
+        self._closing = False
         self.store = ImportStore(DB_PATH)
         self._build_ui()
 
@@ -258,6 +261,8 @@ class SplitterApp(tk.Tk):
         action_frame.pack(fill="x", pady=8)
         self.run_button = ttk.Button(action_frame, text="开始拆分导出", command=self.start_export)
         self.run_button.pack(side="right")
+        self.stop_button = ttk.Button(action_frame, text="结束任务并释放资源", command=self.stop_and_cleanup, state="disabled")
+        self.stop_button.pack(side="right", padx=(8, 0))
         self.progress = ttk.Progressbar(action_frame, mode="indeterminate")
         self.progress.pack(side="left", fill="x", expand=True, padx=(0, 10))
         self.log = tk.Text(root, height=8, state="disabled", background="#f7f7f7")
@@ -309,23 +314,28 @@ class SplitterApp(tk.Tk):
             messagebox.showwarning("缺少文件", "请先选择 Excel 文件。")
             return
         self.run_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.progress.start(10)
-        threading.Thread(target=self._import_worker, daemon=True).start()
+        self._cancel_event.clear()
+        self._worker_thread = threading.Thread(target=self._import_worker, daemon=True)
+        self._worker_thread.start()
 
     def _import_worker(self):
         try:
             self.log_line("开始扫描并导入 SQLite...")
-            task_id, headers = self.store.import_files(self.files, self.log_line)
+            task_id, headers = self.store.import_files(self.files, self.log_line, self._cancel_event)
             self.task_id, self.headers = task_id, headers
             self.after(0, self.populate_fields)
             self.log_line(f"导入完成，共识别 {len(headers)} 个字段。")
+        except ExportCancelled as exc:
+            self.log_line(str(exc) + "，临时导入数据已清理。")
         except Exception as exc:
             ERROR_LOG.write_text(traceback.format_exc(), encoding="utf-8")
             error_message = str(exc)
             self.log_line(f"导入失败: {error_message}")
             self.after(0, lambda message=error_message: messagebox.showerror("导入失败", f"{message}\n\n详细日志：{ERROR_LOG}"))
         finally:
-            self.after(0, lambda: (self.progress.stop(), self.run_button.configure(state="normal")))
+            self.after(0, lambda: (self.progress.stop(), self.run_button.configure(state="normal"), self.stop_button.configure(state="disabled")))
 
     def set_selected_date(self, start: str | None, end: str | None):
         self.selected_start_date = start
@@ -411,12 +421,14 @@ class SplitterApp(tk.Tk):
             messagebox.showwarning("日期字段不完整", "如果使用日期分文件，请同时选择年、月、日三个字段。")
             return
         self.run_button.configure(state="disabled")
+        self.stop_button.configure(state="normal")
         self.progress.start(10)
         selected_customers = [self.customer_names[index] for index in self.customer_list.curselection()]
         if self.customer_names and not selected_customers:
             messagebox.showwarning("客户未选择", "请至少选择一个预设客户，或清空客户配置后导出全部客户。")
             self.progress.stop()
             self.run_button.configure(state="normal")
+            self.stop_button.configure(state="disabled")
             return
         # Read all Tk variables on the main thread before starting the worker.
         # Tkinter StringVar.get() is not safe to call from a background thread.
@@ -424,13 +436,14 @@ class SplitterApp(tk.Tk):
         output_path = self.output_var.get().strip()
         region_path = self.region_path_var.get().strip()
         region_value = self.region_var.get().strip() or None
-        threading.Thread(
+        self._worker_thread = threading.Thread(
             target=self._export_worker,
-            args=(task_id, output_path, region_path, selected, customer, region_value, *date_fields, self.selected_start_date, self.selected_end_date, selected_customers),
+            args=(task_id, output_path, region_path, selected, customer, region_value, *date_fields, self.selected_start_date, self.selected_end_date, selected_customers, self._cancel_event),
             daemon=True,
-        ).start()
+        )
+        self._worker_thread.start()
 
-    def _export_worker(self, task_id, output_path, region_path, selected, customer, region, year_field, month_field, day_field, start_date, end_date, selected_customers):
+    def _export_worker(self, task_id, output_path, region_path, selected, customer, region, year_field, month_field, day_field, start_date, end_date, selected_customers, cancel_event):
         try:
             rules = load_region_rules(region_path)
             result = export_task(
@@ -448,18 +461,63 @@ class SplitterApp(tk.Tk):
                 self.log_line,
                 end_date,
                 selected_customers,
+                cancel_event,
             )
             self.log_line(f"导出完成：{result['rows']} 行，{result['files']} 个文件。")
             self.after(0, lambda: messagebox.showinfo("完成", f"已生成 {result['files']} 个客户文件。"))
+        except ExportCancelled as exc:
+            self.log_line(str(exc) + "，临时表和工作簿已清理。")
         except Exception as exc:
             ERROR_LOG.write_text(traceback.format_exc(), encoding="utf-8")
             error_message = str(exc)
             self.log_line(f"导出失败: {error_message}")
             self.after(0, lambda message=error_message: messagebox.showerror("导出失败", f"{message}\n\n详细日志：{ERROR_LOG}"))
         finally:
-            self.after(0, lambda: (self.progress.stop(), self.run_button.configure(state="normal")))
+            self.after(0, lambda: (self.progress.stop(), self.run_button.configure(state="normal"), self.stop_button.configure(state="disabled")))
+
+    def stop_and_cleanup(self):
+        """Request cooperative cancellation, then reopen SQLite to release handles."""
+        worker = self._worker_thread
+        if worker and worker.is_alive():
+            self._cancel_event.set()
+            self.stop_button.configure(state="disabled")
+            self.log_line("已请求结束任务，正在等待当前批次收尾并释放数据库...")
+            self.after(100, self._finish_cleanup_when_idle)
+            return
+        self._reopen_store()
+
+    def _finish_cleanup_when_idle(self):
+        worker = self._worker_thread
+        if worker and worker.is_alive():
+            self.after(100, self._finish_cleanup_when_idle)
+            return
+        self._reopen_store()
+
+    def _reopen_store(self):
+        try:
+            self.store.close()
+        except Exception:
+            pass
+        self.store = ImportStore(DB_PATH)
+        self.log_line("后台任务已结束，SQLite 连接已关闭并重新建立，文件占用已释放。")
 
     def destroy(self):
+        if self._closing:
+            return
+        worker = self._worker_thread
+        if worker and worker.is_alive():
+            self._closing = True
+            self._cancel_event.set()
+            self.after(100, self._destroy_when_idle)
+            return
+        self.store.close()
+        super().destroy()
+
+    def _destroy_when_idle(self):
+        worker = self._worker_thread
+        if worker and worker.is_alive():
+            self.after(100, self._destroy_when_idle)
+            return
         self.store.close()
         super().destroy()
 
