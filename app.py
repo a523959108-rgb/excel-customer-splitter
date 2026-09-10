@@ -265,8 +265,14 @@ class SplitterApp(tk.Tk):
         self.stop_button.pack(side="right", padx=(8, 0))
         self.progress = ttk.Progressbar(action_frame, mode="indeterminate")
         self.progress.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        cache_frame = ttk.Frame(root)
+        cache_frame.pack(fill="x", pady=(0, 6))
+        self.cache_info_var = tk.StringVar()
+        ttk.Label(cache_frame, textvariable=self.cache_info_var, foreground="#666").pack(side="left", fill="x", expand=True)
+        ttk.Button(cache_frame, text="清除本地数据库缓存", command=self.clear_database_cache).pack(side="right")
         self.log = tk.Text(root, height=8, state="disabled", background="#f7f7f7")
         self.log.pack(fill="both", expand=False)
+        self.refresh_cache_info()
 
     def log_line(self, message: str):
         self.after(0, lambda: (self.log.configure(state="normal"), self.log.insert("end", message + "\n"), self.log.see("end"), self.log.configure(state="disabled")))
@@ -500,6 +506,53 @@ class SplitterApp(tk.Tk):
             pass
         self.store = ImportStore(DB_PATH)
         self.log_line("后台任务已结束，SQLite 连接已关闭并重新建立，文件占用已释放。")
+        self.refresh_cache_info()
+
+    def _cache_paths(self) -> tuple[Path, ...]:
+        return (DB_PATH, Path(f"{DB_PATH}-wal"), Path(f"{DB_PATH}-shm"))
+
+    def refresh_cache_info(self):
+        total_size = sum(path.stat().st_size for path in self._cache_paths() if path.exists())
+        size_mb = total_size / (1024 * 1024)
+        self.cache_info_var.set(f"本地数据库缓存：{size_mb:.1f} MB（{DATA_DIR}）")
+
+    def clear_database_cache(self):
+        worker = self._worker_thread
+        if worker and worker.is_alive():
+            messagebox.showwarning("任务正在运行", "请先点击“结束任务并释放资源”，等待后台任务结束后再清除数据库缓存。")
+            return
+        if not messagebox.askyesno(
+            "确认清除缓存",
+            f"将删除本地数据库缓存及 SQLite 临时文件：\n{DB_PATH}\n\n这不会删除 Excel、导出结果或配置文件。是否继续？",
+        ):
+            return
+        try:
+            self.store.close()
+            deleted = 0
+            for path in self._cache_paths():
+                try:
+                    path.unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    pass
+            self.store = ImportStore(DB_PATH)
+            self.task_id = None
+            self.headers = []
+            self.field_list.delete(0, tk.END)
+            self.customer_combo["values"] = []
+            self.region_combo["values"] = []
+            for variable in (self.customer_var, self.region_var, self.year_var, self.month_var, self.day_var):
+                variable.set("")
+            self.calendar.clear()
+            self.log_line(f"已清除本地数据库缓存，删除 {deleted} 个文件；请重新选择 Excel 并导入。")
+            self.refresh_cache_info()
+        except Exception as exc:
+            ERROR_LOG.write_text(traceback.format_exc(), encoding="utf-8")
+            try:
+                self.store = ImportStore(DB_PATH)
+            except Exception:
+                pass
+            messagebox.showerror("清除缓存失败", f"{exc}\n\n详细日志：{ERROR_LOG}")
 
     def destroy(self):
         if self._closing:
