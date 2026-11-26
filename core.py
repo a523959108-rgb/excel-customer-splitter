@@ -10,6 +10,7 @@ import uuid
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from queue import Queue
 from tempfile import NamedTemporaryFile
@@ -419,13 +420,15 @@ def parse_date_folder(value: object, fallback: str) -> str:
 
 def _date_part(value: object) -> int | None:
     """Convert a year/month/day cell to an integer without accepting junk."""
-    if value is None or not str(value).strip():
-        return None
+    if isinstance(value, int):
+        return value if 0 < value <= 9999 else None
     try:
-        number = int(float(str(value).strip()))
-    except (TypeError, ValueError):
-        return None
-    return number
+        number = Decimal(str(value).strip())
+        if number.is_finite() and 0 < number <= 9999 and number == number.to_integral_value():
+            return int(number)
+    except InvalidOperation:
+        pass
+    return None
 
 
 def json_path(key: str) -> str:
