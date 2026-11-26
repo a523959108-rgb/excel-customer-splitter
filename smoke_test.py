@@ -34,6 +34,8 @@ def run(app_type):
                 app.withdraw()
                 with patch("tkinter.filedialog.asksaveasfilename", return_value=str(path)):
                     app.create_database()
+                if not app.import_panel.winfo_manager():
+                    raise ValueError("New database should show Excel import")
                 for i, records in enumerate(
                     ([(1, "甲", 10), (2, "旧", 20)], [(2, "乙", 21), (2, "乙", 21), (3, "甲", 30)])
                 ):
@@ -45,6 +47,10 @@ def run(app_type):
                     source = root / f"source{i}.xlsx"
                     book.save(source)
                     book.close()
+                    if i:
+                        app.import_toggle.invoke()
+                    if not app.import_panel.winfo_manager():
+                        raise ValueError("Excel file selector is hidden")
                     with patch("tkinter.filedialog.askopenfilenames", return_value=[str(source)]):
                         app.choose_files()
                     app.import_button.invoke()
@@ -56,8 +62,13 @@ def run(app_type):
                 app.withdraw()
                 if app.store.path != path.resolve() or len(app.calendar.available) != 3:
                     raise ValueError("Saved database or calendar did not reopen")
+                if app.import_panel.winfo_manager():
+                    raise ValueError("Existing database should open in the export view")
                 app.output_var.set(str(root / "output"))
-                app.customer_names = []
+                config = root / "customers.json"
+                config.write_text('{"customers": ["甲", "乙"]}', encoding="utf-8")
+                with patch("tkinter.filedialog.askopenfilename", return_value=str(config)):
+                    app.choose_customer_config()
                 app.run_button.invoke()
                 settle(app)
                 contents = []
