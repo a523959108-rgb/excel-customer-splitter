@@ -629,7 +629,7 @@ class FieldChipGrid(tk.Frame):
 
 
 class SplitterApp(tk.Tk):
-    def __init__(self, data_dir=DATA_DIR):
+    def __init__(self, data_dir=DATA_DIR, *, install_dir=BASE_DIR):
         enable_windows_dpi_awareness()
         super().__init__()
         self.ui_font = pick_ui_font(self)
@@ -658,6 +658,7 @@ class SplitterApp(tk.Tk):
         self._active_view = "export"
 
         self.data_dir = Path(data_dir)
+        self.default_database_dir = self.data_dir
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings = self.data_dir / "settings.json"
         self.store = None
@@ -672,11 +673,17 @@ class SplitterApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         try:
+            default_location = Path(install_dir) / "database-directory.txt"
+            if default_location.is_file():
+                location = Path(default_location.read_text(encoding="utf-8-sig").rstrip("\r\n"))
+                if not location.is_absolute():
+                    raise ValueError("安装配置中的数据库目录必须为完整路径")
+                self.default_database_dir = location
             if self.settings.exists():
                 path = Path(json.loads(self.settings.read_text(encoding="utf-8"))["database"])
                 self.open_store(path, existing=True)
             else:
-                self.open_store(self.data_dir / "splitter.duckdb")
+                self.open_store(self.default_database_dir / "splitter.duckdb")
         except Exception as exc:
             self.toggle_log()
             self.log_line(f"无法打开数据库：{exc}。请点击“打开库”或“新建库”。")
@@ -1660,7 +1667,10 @@ class SplitterApp(tk.Tk):
             self._select_database(path, existing=True)
 
     def create_database(self):
-        path = filedialog.asksaveasfilename(title="新建客户数据库", defaultextension=".duckdb", filetypes=[("DuckDB", "*.duckdb")])
+        path = filedialog.asksaveasfilename(
+            title="新建客户数据库", initialdir=str(self.default_database_dir),
+            defaultextension=".duckdb", filetypes=[("DuckDB", "*.duckdb")],
+        )
         if path:
             if Path(path).exists():
                 messagebox.showwarning("文件已存在", "请选择新文件名，或用“打开库”加载已有数据库。")

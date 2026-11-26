@@ -22,6 +22,9 @@ def run(app_type):
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
         profile = root / "profile"
+        default_db_dir = root / "客户 数据目录"
+        default_db_dir.mkdir()
+        (root / "database-directory.txt").write_text(str(default_db_dir) + "\r\n", encoding="utf-8-sig")
         path = root / "测试库.duckdb"
         errors = []
         with (
@@ -29,11 +32,15 @@ def run(app_type):
             patch("tkinter.messagebox.showwarning", side_effect=lambda *args: errors.append(args)),
             patch("tkinter.messagebox.showinfo"),
         ):
-            app = app_type(profile)
+            app = app_type(profile, install_dir=root)
             try:
                 app.withdraw()
-                with patch("tkinter.filedialog.asksaveasfilename", return_value=str(path)):
+                if app.store.path != (default_db_dir / "splitter.duckdb").resolve():
+                    raise ValueError("First launch did not use the installer's database directory")
+                with patch("tkinter.filedialog.asksaveasfilename", return_value=str(path)) as save:
                     app.create_database()
+                    if Path(save.call_args.kwargs["initialdir"]) != default_db_dir:
+                        raise ValueError("New database dialog did not use the installed default")
                 if not app.import_panel.winfo_manager():
                     raise ValueError("New database should show Excel import")
                 for i, records in enumerate(
@@ -57,7 +64,7 @@ def run(app_type):
                     settle(app)
             finally:
                 app.destroy()
-            app = app_type(profile)
+            app = app_type(profile, install_dir=root)
             try:
                 app.withdraw()
                 if app.store.path != path.resolve() or len(app.calendar.available) != 3:

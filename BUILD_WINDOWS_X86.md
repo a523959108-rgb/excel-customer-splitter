@@ -16,3 +16,5 @@ dist\Excel客户拆分\Excel客户拆分.exe
 ```
 
 发布时复制整个 `dist\Excel客户拆分` 文件夹，包括 `_internal`、`regions.json` 和 `customer_config.json`。脚本使用 x64 Python 构建并运行桌面自检。Windows 11 ARM 虚拟机也可以通过 x64 兼容层运行该程序。
+
+要构建中文安装向导，在完成上述构建后使用 Inno Setup 6.6 或更高的 6.x 版本运行 `.\build_installer.ps1`。产物位于 `dist\installer\ExcelCustomerSplitter-Setup-x64.exe`。GitHub Actions 的 **Build Windows x64** 工作流会额外验证安装、覆盖安装以及卸载后的数据库内容。
