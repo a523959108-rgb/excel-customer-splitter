@@ -1,0 +1,342 @@
+{
+  "date": "2026-11-26",
+  "project_commit": "86f135d",
+  "guest": "Windows 11 ARM64 / Python 3.13.7 ARM64 / 4 vCPU / 6 GiB / local C:",
+  "xlsx_end_to_end": {
+    "xlsx_input_rows": 10000000,
+    "platform": "Windows-11-10.0.26200-SP0",
+    "duckdb": "1.5.4",
+    "fixture_seconds": 442.952,
+    "input_files": 20,
+    "input_bytes": 283557661,
+    "import_seconds": 653.103,
+    "database_bytes": 58470400,
+    "export_seconds": 538.517,
+    "files": 12,
+    "readback_seconds": 323.506,
+    "sampled_peak_files_bytes": 1694299190,
+    "wall_seconds": 1959.27,
+    "peak_main_process_bytes": 4171685888,
+    "active_seconds": {
+      "load_file": 69.27656245895196,
+      "publish": 23.569665458984673,
+      "checkpoint": 0.08109779196092859
+    },
+    "manifest_files_and_rows": {
+      "客户0.xlsx": 1048575,
+      "客户0_part2.xlsx": 1048575,
+      "客户0_part3.xlsx": 1048575,
+      "客户0_part4.xlsx": 187609,
+      "客户1.xlsx": 1048575,
+      "客户1_part2.xlsx": 1048575,
+      "客户1_part3.xlsx": 1048575,
+      "客户1_part4.xlsx": 187608,
+      "客户2.xlsx": 1048575,
+      "客户2_part2.xlsx": 1048575,
+      "客户2_part3.xlsx": 1048575,
+      "客户2_part4.xlsx": 187608
+    },
+    "output_bytes": 278724231,
+    "verified_unique_ids": 10000000,
+    "verified_data_cells": 60000000
+  },
+  "same_xlsx_import_variants": {
+    "process_4": {
+      "total": 304.0686,
+      "read_and_stage": 260.5586,
+      "load_active": 82.7626,
+      "publish_commit_checkpoint": 43.5101,
+      "verified_rows": 10000000
+    },
+    "disk_cache": {
+      "total": 115.9082,
+      "read_and_stage": 68.624,
+      "load_active": 66.724,
+      "publish_commit_checkpoint": 47.2842,
+      "verified_rows": 10000000
+    },
+    "cache_bytes": 113679143,
+    "files": 20
+  },
+  "database_benchmarks": [
+    {
+      "rows": 10000000,
+      "platform": "Windows-11-10.0.26200-SP0",
+      "duckdb": "1.5.4",
+      "generate_publish_seconds": 13.7709,
+      "database_bytes": 28323840,
+      "calendar_seconds": 0.0023,
+      "full_scan_seconds": 0.0465,
+      "month_customer_read_seconds": 0.1092,
+      "month_customer_rows": 777,
+      "xlsx_export_seconds": 0.2137,
+      "xlsx_verify_seconds": 0.023,
+      "query_comparison": {
+        "raw_names": 1000,
+        "dictionary_build_seconds": 0.006914,
+        "seconds": {
+          "current_1": [
+            0.166958,
+            0.155565,
+            0.166229
+          ],
+          "current_4": [
+            0.04932,
+            0.089208,
+            0.050756
+          ],
+          "dictionary_1": [
+            0.053481,
+            0.044305,
+            0.041564
+          ],
+          "dictionary_4": [
+            0.029822,
+            0.044856,
+            0.031436
+          ]
+        },
+        "median_seconds": {
+          "current_1": 0.166229,
+          "current_4": 0.050756,
+          "dictionary_1": 0.044305,
+          "dictionary_4": 0.031436
+        }
+      },
+      "sampled_peak_files_bytes": 28341149,
+      "wall_seconds": 15.858
+    },
+    {
+      "rows": 100000000,
+      "platform": "Windows-11-10.0.26200-SP0",
+      "duckdb": "1.5.4",
+      "generate_publish_seconds": 155.3075,
+      "database_bytes": 221261824,
+      "calendar_seconds": 0.0123,
+      "full_scan_seconds": 0.5624,
+      "month_customer_read_seconds": 0.6244,
+      "month_customer_rows": 7777,
+      "xlsx_export_seconds": 1.0096,
+      "xlsx_verify_seconds": 0.2486,
+      "query_comparison": {
+        "raw_names": 1000,
+        "dictionary_build_seconds": 0.126323,
+        "seconds": {
+          "current_1": [
+            1.239386,
+            1.33857,
+            1.443156
+          ],
+          "current_4": [
+            0.572537,
+            0.576645,
+            0.628253
+          ],
+          "dictionary_1": [
+            0.26922,
+            0.420314,
+            0.59217
+          ],
+          "dictionary_4": [
+            0.182437,
+            0.165967,
+            0.322801
+          ]
+        },
+        "median_seconds": {
+          "current_1": 1.33857,
+          "current_4": 0.576645,
+          "dictionary_1": 0.420314,
+          "dictionary_4": 0.182437
+        }
+      },
+      "sampled_peak_files_bytes": 221384480,
+      "wall_seconds": 166.535
+    }
+  ],
+  "import_trials": {
+    "rows": 160000,
+    "files": 4,
+    "repeats": 3,
+    "xlsx_bytes": 4583243,
+    "cache_bytes": 2118068,
+    "single_worker_spool_seconds": 6.7713,
+    "timings": {
+      "thread_1": [
+        {
+          "total": 7.7608,
+          "read_and_stage": 7.3636,
+          "load_active": 1.1834,
+          "publish_commit_checkpoint": 0.3972
+        },
+        {
+          "total": 5.4537,
+          "read_and_stage": 5.1966,
+          "load_active": 0.7795,
+          "publish_commit_checkpoint": 0.2571
+        },
+        {
+          "total": 7.7422,
+          "read_and_stage": 7.2557,
+          "load_active": 1.0725,
+          "publish_commit_checkpoint": 0.4865
+        }
+      ],
+      "thread_4": [
+        {
+          "total": 8.1353,
+          "read_and_stage": 7.8312,
+          "load_active": 0.9006,
+          "publish_commit_checkpoint": 0.3042
+        },
+        {
+          "total": 7.6045,
+          "read_and_stage": 7.2818,
+          "load_active": 1.1227,
+          "publish_commit_checkpoint": 0.3228
+        },
+        {
+          "total": 8.2264,
+          "read_and_stage": 7.9191,
+          "load_active": 1.2427,
+          "publish_commit_checkpoint": 0.3073
+        }
+      ],
+      "process_2": [
+        {
+          "total": 6.1372,
+          "read_and_stage": 5.7938,
+          "load_active": 1.0532,
+          "publish_commit_checkpoint": 0.3435
+        },
+        {
+          "total": 4.4444,
+          "read_and_stage": 4.215,
+          "load_active": 0.7533,
+          "publish_commit_checkpoint": 0.2294
+        },
+        {
+          "total": 5.4572,
+          "read_and_stage": 5.1205,
+          "load_active": 0.842,
+          "publish_commit_checkpoint": 0.3367
+        }
+      ],
+      "process_4": [
+        {
+          "total": 5.9669,
+          "read_and_stage": 5.5741,
+          "load_active": 0.9695,
+          "publish_commit_checkpoint": 0.3928
+        },
+        {
+          "total": 3.2259,
+          "read_and_stage": 3.0191,
+          "load_active": 0.7607,
+          "publish_commit_checkpoint": 0.2068
+        },
+        {
+          "total": 4.8046,
+          "read_and_stage": 4.4491,
+          "load_active": 1.0705,
+          "publish_commit_checkpoint": 0.3555
+        }
+      ],
+      "disk_cache": [
+        {
+          "total": 1.2333,
+          "read_and_stage": 0.8218,
+          "load_active": 0.8014,
+          "publish_commit_checkpoint": 0.4115
+        },
+        {
+          "total": 0.9675,
+          "read_and_stage": 0.737,
+          "load_active": 0.7185,
+          "publish_commit_checkpoint": 0.2304
+        },
+        {
+          "total": 1.1228,
+          "read_and_stage": 0.786,
+          "load_active": 0.7732,
+          "publish_commit_checkpoint": 0.3368
+        }
+      ]
+    },
+    "median": {
+      "thread_1": 7.7422,
+      "thread_4": 8.1353,
+      "process_2": 5.4572,
+      "process_4": 4.8046,
+      "disk_cache": 1.1228
+    },
+    "sampled_peak_files_bytes": 11186152,
+    "wall_seconds": 94.988
+  },
+  "reader_trials": {
+    "input_files": [
+      "01_首批_01至12日.xlsx",
+      "02a_续批_11至20日_上.xlsx",
+      "02b_续批_11至20日_下.xlsx"
+    ],
+    "physical_cells_compared": 273392,
+    "seconds": {
+      "current": [
+        1.60373,
+        1.5428,
+        1.54967
+      ],
+      "calamine": [
+        0.31853,
+        0.2219,
+        0.18699
+      ]
+    },
+    "median": {
+      "current": 1.54967,
+      "calamine": 0.2219
+    },
+    "raw_differences": {
+      "NoneType -> str": 17239,
+      "int -> float": 57951,
+      "datetime -> date": 418
+    },
+    "uncached_formula_native": {
+      "rejected": false,
+      "values_after_customer": [
+        ""
+      ]
+    },
+    "wall_seconds": 8.281
+  },
+  "snapshot_replay_macos": [
+    {
+      "step": "first",
+      "rows": 5427,
+      "fields": 27,
+      "undated": 3,
+      "cache_hits": 0
+    },
+    {
+      "step": "overlap",
+      "rows": 9038,
+      "fields": 29,
+      "undated": 6,
+      "cache_hits": 0
+    },
+    {
+      "step": "replay",
+      "rows": 9038,
+      "fields": 29,
+      "undated": 6,
+      "cache_hits": 2
+    },
+    {
+      "step": "correction",
+      "rows": 9040,
+      "fields": 29,
+      "undated": 8,
+      "cache_hits": 1
+    }
+  ]
+}

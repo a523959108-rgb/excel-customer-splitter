@@ -56,4 +56,6 @@ python benchmark.py --rows 10000000 100000000
 
 真实 Excel 测试覆盖造文件、导入、导出及逐格核对。数据库测试用 360 天、1,000 个客户和 6 个业务字段，按批发布，核对全库行数和单号校验和，再导出某月某客户并逐行核对。规则生成的数据具有较高可压缩性。
 
+Windows 虚拟机的千万行 Excel 全流程、亿行查询、并行解析和缓存对照见[独立压测报告](BENCHMARK_RESULTS.md)。
+
 使用 Windows x64 Python 运行 `build_windows.ps1`，脚本会执行单元测试、构建程序并自检最终 EXE。GitHub Actions 的 **Build Windows x64** 工作流可生成完整 ZIP 包。

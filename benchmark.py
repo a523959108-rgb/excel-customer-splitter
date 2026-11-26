@@ -1,8 +1,10 @@
 """Reproducible DuckDB storage/read benchmark using the production schema and export."""
 
 import argparse
+import csv
 import json
 import platform
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -15,7 +17,7 @@ from warehouse import CELL, Warehouse
 FIELDS = ["年", "月", "日", "客户", "金额", "单号"]
 
 
-def run(n, directory):
+def run(n, directory, *, query_probe=None):
     with tempfile.TemporaryDirectory(dir=directory) as tmp:
         root = Path(tmp)
         store = Warehouse(root / "bench.duckdb")
@@ -99,12 +101,14 @@ def run(n, directory):
                     wb.close()
 
             measured("xlsx_verify", read_back)
+            if query_probe:
+                result["query_comparison"] = query_probe(store, sql, params, rows)
             return result
         finally:
             store.close()
 
 
-def run_excel(n, directory):
+def run_excel(n, directory, progress=None, *, import_probe=None):
     """Generate real input files, use the normal import/export, verify every cell."""
     if n <= 0:
         raise ValueError("rows must be positive")
@@ -128,9 +132,13 @@ def run_excel(n, directory):
                 path = root / f"input-{offset}.xlsx"
                 wb.save(path)
                 files.append(path)
+                if progress:
+                    progress(f"Prepared {len(files)} XLSX files ({min(n, offset + 500000):,} rows)")
             result["fixture_seconds"] = round(time.perf_counter() - start, 3)
+            result["input_files"] = len(files)
+            result["input_bytes"] = sum(path.stat().st_size for path in files)
             start = time.perf_counter()
-            _, fields = store.import_files(files)
+            _, fields = store.import_files(files, progress=progress)
             store.checkpoint()
             result["import_seconds"] = round(time.perf_counter() - start, 3)
             result["database_bytes"] = store.path.stat().st_size
@@ -138,9 +146,20 @@ def run_excel(n, directory):
             stats = store.export(root / "out", fields, "客户", None, [], "2025-02-01", "2025-02-28", [])
             result["export_seconds"] = round(time.perf_counter() - start, 3)
             result["files"] = stats["files"]
+            if progress:
+                progress(f"Exported {stats['rows']:,} rows in {stats['files']} files")
             start = time.perf_counter()
+            with stats["manifest"].open(encoding="utf-8-sig", newline="") as manifest:
+                manifest_rows = list(csv.DictReader(manifest))
+            listed = {row["相对路径"]: int(row["明细行数"]) for row in manifest_rows}
+            if len(listed) != len(manifest_rows) or len(listed) != stats["files"]:
+                raise ValueError("Duplicate or missing manifest entries")
+            counts = {}
+            output_bytes = 0
             seen = bytearray(n)
             for path in (root / "out").rglob("*.xlsx"):
+                count = 0
+                customer = path.stem.split("_part")[0]
                 wb = load_workbook(path, read_only=True, data_only=True)
                 try:
                     rows = wb.active.values
@@ -148,17 +167,27 @@ def run_excel(n, directory):
                         raise ValueError("XLSX header mismatch")
                     for row in rows:
                         i = row[-1]
-                        if not 0 <= i < n or seen[i] or row != record(i):
+                        if not 0 <= i < n or seen[i] or row != record(i) or row[3] != customer:
                             raise ValueError(f"XLSX row mismatch at {i}")
                         seen[i] = 1
+                        count += 1
                 finally:
                     wb.close()
+                counts[str(path.relative_to(root / "out"))] = count
+                output_bytes += path.stat().st_size
+                if progress:
+                    progress(f"Verified {path.name} ({count:,} rows)")
+            if counts != listed:
+                raise ValueError("Manifest and workbook row counts differ")
             if sum(seen) != n or stats["rows"] != n:
                 raise ValueError("Missing XLSX rows")
             result["readback_seconds"] = round(time.perf_counter() - start, 3)
-            return result
+            result["output_bytes"] = output_bytes
         finally:
             store.close()
+        if import_probe:
+            result["import_comparison"] = import_probe(root, files, n)
+        return result
 
 
 if __name__ == "__main__":
@@ -168,8 +197,25 @@ if __name__ == "__main__":
     parser.add_argument(
         "--xlsx-rows", type=int, help="generate, import, export and verify this many real Excel rows"
     )
+    parser.add_argument(
+        "--compare-imports", action="store_true",
+        help="also import the same Excel files using four processes, then reuse their parsed cache",
+    )
     args = parser.parse_args()
-    if args.xlsx_rows:
-        print(json.dumps(run_excel(args.xlsx_rows, args.directory), ensure_ascii=False), flush=True)
+    if args.compare_imports and args.xlsx_rows is None:
+        parser.error("--compare-imports requires --xlsx-rows")
+    import_probe = None
+    if args.compare_imports:
+        from benchmark_import import compare_same_xlsx
+
+        import_probe = compare_same_xlsx
+    if args.xlsx_rows is not None:
+        result = run_excel(
+            args.xlsx_rows,
+            args.directory,
+            lambda msg: print(msg, file=sys.stderr, flush=True),
+            import_probe=import_probe,
+        )
+        print(json.dumps(result, ensure_ascii=False), flush=True)
     for size in args.rows or ([] if args.xlsx_rows else [10_000_000]):
         print(json.dumps(run(size, args.directory), ensure_ascii=False), flush=True)
