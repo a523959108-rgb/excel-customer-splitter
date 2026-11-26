@@ -36,6 +36,12 @@ class WarehouseTests(unittest.TestCase):
     def output_rows(self, output="out"):
         return [r for p in (self.root / output).rglob("*.xlsx") for r in read_excel(p)[1:]]
 
+    def test_multiline_first_record_round_trip(self):
+        rows = [(2026, 2, 1, "甲", 2, '备注,"原文"\n下一行'), (2026, 2, 1, "乙", 3, "单行")]
+        self.store.import_files([self.file("多行备注.xlsx", rows)])
+        self.assertEqual(self.export()["rows"], len(rows))
+        self.assertCountEqual(self.output_rows(), rows)
+
     def test_two_overlapping_snapshots_and_reopen(self):
         first = [(2025, 1, i, "甲", i, "001") for i in range(1, 13)]
         first += [(2025, 1, 11, "撤销", 999, "009")]

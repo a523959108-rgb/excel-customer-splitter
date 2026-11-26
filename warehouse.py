@@ -134,7 +134,7 @@ def spool_rows(path, columns, rows, event, audit=False):
     total = 0
     audit_totals = {}
     with gzip.open(path, "wt", newline="", encoding="utf-8", compresslevel=1) as file:
-        writer = csv.writer(file)
+        writer = csv.writer(file, lineterminator="\r\n")
         for row_number, values in rows:
             if total % 1024 == 0:
                 cancelled(event)
@@ -292,7 +292,7 @@ class Warehouse:
                 f"""
                 INSERT INTO incoming ({names}) SELECT {projection}
                 FROM read_csv(?,columns={{{csv_schema}}},header=false,auto_detect=false,
-                              delim=',',quote='"',escape='"',nullstr='',null_padding=true,parallel=false,max_line_size=134217728)
+                              delim=',',quote='"',escape='"',new_line='\\r\\n',nullstr='',null_padding=true,parallel=false,max_line_size=134217728)
             """,
                 [fid, str(csv_path)],
             ).fetchone()[0]
