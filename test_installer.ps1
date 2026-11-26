@@ -6,8 +6,8 @@ $program = Join-Path $root '软件 目录'
 $data = Join-Path $root '客户 明细'
 $db = Join-Path $data 'splitter.duckdb'
 $exe = Join-Path $program 'Excel客户拆分.exe'
-$profile = Join-Path $root 'profile'
-$settings = Join-Path $profile 'ExcelCustomerSplitter\settings.json'
+$testProfile = Join-Path $root 'profile'
+$settings = Join-Path $testProfile 'ExcelCustomerSplitter\settings.json'
 $originalLocal = $env:LOCALAPPDATA
 function Invoke-Setup([string]$binary, [string[]]$options) {
     $proc = Start-Process $binary -ArgumentList $options -PassThru
@@ -16,14 +16,17 @@ function Invoke-Setup([string]$binary, [string[]]$options) {
 }
 function Start-AndCloseApp {
     try {
-        $env:LOCALAPPDATA = $profile
+        $env:LOCALAPPDATA = $testProfile
         $app = Start-Process $exe -PassThru
         $readyBy = [datetime]::UtcNow.AddSeconds(45)
         do {
             Start-Sleep -Milliseconds 250
             $app.Refresh()
-        } until (($app.MainWindowHandle -and (Test-Path $settings)) -or $app.HasExited -or [datetime]::UtcNow -ge $readyBy)
-        if (!$app.MainWindowHandle -or !$app.CloseMainWindow() -or !$app.WaitForExit(20000)) { throw 'Installed app did not start and close normally.' }
+            $ready = !$app.HasExited -and $app.MainWindowHandle.ToInt64() -ne 0 -and
+                $app.MainWindowTitle -eq '客户 Excel 拆分工具' -and (Test-Path $settings)
+        } until ($ready -or $app.HasExited -or [datetime]::UtcNow -ge $readyBy)
+        if (!$ready) { throw "App did not open the expected window. Exit=$($app.HasExited), Title=$($app.MainWindowTitle), Settings=$(Test-Path $settings)" }
+        if (!$app.CloseMainWindow() -or !$app.WaitForExit(20000)) { throw 'Could not close the installed application.' }
         if ($app.ExitCode -ne 0) { throw 'Installed app exited with an error.' }
     } finally {
         if ($app -and !$app.HasExited) { $app.Kill(); $app.WaitForExit() }
@@ -35,6 +38,21 @@ function Start-AndCloseApp {
 $quiet = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
 Invoke-Setup $setup ($quiet + "/DIR=`"$program`"" + "/DBDIR=`"$data`"")
 if (!(Test-Path $exe)) { throw 'Wrong application directory.' }
+$rule = New-NetFirewallRule -DisplayName ("Splitter offline test " + [guid]::NewGuid()) -Program $exe -Direction Outbound -Action Block -Profile Any
+$previousPath = $env:Path
+try {
+    # Launch from outside the checkout with no Python, Office, or build tools on PATH.
+    $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+    Push-Location $root
+    try {
+        Invoke-Setup $exe @('--self-test')
+    } finally { Pop-Location }
+} finally {
+    $env:Path = $previousPath
+    Remove-NetFirewallRule -Name $rule.Name
+}
+Write-Host 'Installed executable passed the offline Excel import, restart and export self-test.'
+
 Start-AndCloseApp
 & python -c "import duckdb,sys; c=duckdb.connect(sys.argv[1]); c.execute('CREATE TABLE install_probe AS SELECT 123 AS id'); c.close()" $db
 if ($LASTEXITCODE) { throw 'Could not seed test database.' }

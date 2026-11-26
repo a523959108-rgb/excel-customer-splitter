@@ -1,6 +1,6 @@
 # 客户 Excel 拆分工具
 
-将多个 Excel 导入可持续追加的 DuckDB 数据库，按日期、分区和客户拆分导出。Windows x64 安装版双击 `ExcelCustomerSplitter-Setup-x64.exe`，先选择软件安装位置，再选择默认数据库目录，两者可以在不同的盘。安装完成后可以从开始菜单启动。便携版解压整个 ZIP 后双击“Excel客户拆分.exe”。运行文件、同目录的 `_internal` 和 JSON 配置需要放在一起。
+将多个 Excel 导入可持续追加的 DuckDB 数据库，按日期、分区和客户拆分导出。Windows x64 安装版双击 `ExcelCustomerSplitter-Setup-x64.exe`，先选择软件安装位置，再选择默认数据库目录，两者可以在不同的盘。安装包内含 Python、DuckDB、Excel 读写组件与运行库，支持离线安装和使用，电脑无需另装 Python 或 Microsoft Excel。安装完成后可以从开始菜单启动。便携版解压整个 ZIP 后双击“Excel客户拆分.exe”。运行文件、同目录的 `_internal` 和 JSON 配置需要放在一起。
 
 ## 从导入到导出
 
