@@ -85,5 +85,32 @@ def run(app_type):
                     (2025, 1, 3, "甲", 30),
                 ]:
                     raise ValueError("Desktop export round-trip failed")
+                # Searching limits the controls on screen. Hidden selections still export.
+                app.customer_search_var.set("甲")
+                app.clear_all_customers()
+                app.field_search_var.set("年")
+                app.field_grid.clear_visible()
+                app.field_search_var.set("客户")
+                filtered = root / "filtered"
+                app.output_var.set(str(filtered))
+                app.run_button.invoke()
+                settle(app)
+                paths = list(filtered.rglob("*.xlsx"))
+                if len(paths) != 1:
+                    raise ValueError("Filtered export did not preserve customer selection")
+                book = load_workbook(paths[0], read_only=True, data_only=True)
+                try:
+                    if list(book.active.values) != [
+                        ("月", "日", "客户", "金额"), (1, 2, "乙", 21), (1, 2, "乙", 21)
+                    ]:
+                        raise ValueError("Search changed hidden selections or lost duplicate rows")
+                finally:
+                    book.close()
+                app.field_search_var.set("")
+                with patch("tkinter.filedialog.asksaveasfilename", return_value=str(root / "empty.duckdb")):
+                    app.create_database()
+                if app.field_grid.visible_indices:
+                    raise ValueError("Empty database retained fields from the previous database")
+                app.field_grid._relayout()
             finally:
                 app.destroy()
