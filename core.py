@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -11,13 +12,20 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 from queue import Queue
+from tempfile import NamedTemporaryFile
 from typing import Callable, Iterable
+from xml.etree import ElementTree
+from zipfile import BadZipFile, ZipFile
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.packaging.custom import StringProperty
+from openpyxl.xml.constants import ARC_CUSTOM
 
 
-INVALID_FILENAME_CHARS = re.compile(r'[\\/:*?"<>|]')
+INVALID_FILENAME_CHARS = re.compile(r'[\x00-\x1f\\/:*?"<>|]')
 RESERVED_FILENAMES = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+EXPORT_OWNER = "ExcelCustomerSplitter.Group"
+MAX_DATA_ROWS = 1_048_575
 
 
 class ExportCancelled(Exception):
@@ -31,12 +39,59 @@ def normalize_field(value: object) -> str:
 
 def safe_filename(value: object, fallback: str) -> str:
     text = str(value or "").strip()
-    text = INVALID_FILENAME_CHARS.sub("_", text).rstrip(". ")
+    text = INVALID_FILENAME_CHARS.sub("_", text)[:120].rstrip(". ")
     if not text:
         text = fallback
-    if text.upper() in RESERVED_FILENAMES:
+    if text.split(".", 1)[0].rstrip().upper() in RESERVED_FILENAMES:
         text = f"_{text}"
     return text[:120]
+
+
+def saved_group_matches(path: Path, owner: str) -> bool:
+    """Read only the small custom property part, even for a million-row file."""
+    try:
+        with ZipFile(path) as archive:
+            props = ElementTree.fromstring(archive.read(ARC_CUSTOM))
+    except (BadZipFile, KeyError, ElementTree.ParseError, IsADirectoryError):
+        return False
+    return any(prop.get("name") == EXPORT_OWNER and prop.findtext("{*}lpwstr") == owner for prop in props)
+
+
+def save_group_workbook(workbook, directory: Path, group: tuple[str, str, str], part: int) -> Path:
+    """Replace only an earlier export of this same group and part."""
+    identity = json.dumps([*group, part], ensure_ascii=True).encode("ascii")
+    owner = hashlib.sha256(identity).hexdigest()
+    workbook.custom_doc_props.append(StringProperty(name=EXPORT_OWNER, value=owner))
+    suffix = "" if part == 1 else f"_part{part}"
+    stem = safe_filename(group[2], "未识别客户") + suffix
+    with NamedTemporaryFile(dir=directory, prefix=".splitter-", suffix=".tmp", delete=False) as tmp:
+        temporary = Path(tmp.name)
+    try:
+        workbook.save(temporary)
+        candidate = directory / f"{stem}.xlsx"
+        attempt = 0
+        while True:
+            # Reserve a new path exclusively. Never overwrite an unmarked
+            # workbook or a different customer's file, even on a later run.
+            try:
+                candidate.touch(exist_ok=False)
+            except FileExistsError:
+                if saved_group_matches(candidate, owner):
+                    temporary.replace(candidate)
+                    return candidate
+                attempt += 1
+                counter = "" if attempt == 1 else f"-{attempt}"
+                candidate = directory / f"{stem}~{owner[:12]}{counter}.xlsx"
+                continue
+            try:
+                temporary.replace(candidate)
+            except OSError:
+                candidate.unlink(missing_ok=True)
+                raise
+            return candidate
+    finally:
+        workbook.close()
+        temporary.unlink(missing_ok=True)
 
 
 def json_value(value: object) -> object:
@@ -55,23 +110,53 @@ def find_header_row(ws, search_limit: int = 30) -> int:
     return 1
 
 
+def sheet_columns(header_values):
+    """Identify a column by normalized name and occurrence across input files."""
+    counts = defaultdict(int)
+    columns = {}
+    for position, value in enumerate(header_values, 1):
+        display = (str(value).strip() if value is not None else "") or f"未命名列{position}"
+        base = normalize_field(display)
+        counts[base] += 1
+        occurrence = counts[base]
+        # An @-prefixed literal is escaped too, so no source header can take
+        # the internal key reserved for a duplicate.
+        key = f"@{occurrence}:{base}" if occurrence > 1 or base.startswith("@") else base
+        columns[key] = display
+    return columns
+
+
+def field_choices(columns: dict[str, str]) -> dict[str, tuple[str, str]]:
+    """Map unique UI labels to (original header, persisted JSON key)."""
+    reserved = {normalize_field(display) for display in columns.values()}
+    counts = defaultdict(int)
+    choices = {}
+    for key, display in columns.items():
+        base = normalize_field(display)
+        counts[base] += 1
+        label = display
+        if counts[base] > 1:
+            label = f"{display}（同名{counts[base]}）"
+            while normalize_field(label) in reserved:
+                label += "*"
+            reserved.add(normalize_field(label))
+        choices[label] = (display, key)
+    return choices
+
+
 def scan_headers(paths: Iterable[str | Path]) -> list[str]:
-    names: list[str] = []
-    seen: set[str] = set()
+    columns = {}
     for path in paths:
         wb = load_workbook(path, read_only=True, data_only=True)
         try:
             ws = wb[wb.sheetnames[0]]
             header_row = find_header_row(ws)
-            headers = [str(v).strip() if v is not None and str(v).strip() else f"未命名列{index + 1}" for index, v in enumerate(next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True)))]
-            for header in headers:
-                key = normalize_field(header)
-                if key and key not in seen:
-                    seen.add(key)
-                    names.append(header)
+            values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))
+            for key, display in sheet_columns(values).items():
+                columns.setdefault(key, display)
         finally:
             wb.close()
-    return names
+    return list(field_choices(columns))
 
 
 class ImportStore:
@@ -136,7 +221,7 @@ class ImportStore:
             task_id = uuid.uuid4().hex
             self.connection.execute("INSERT INTO import_task VALUES (?, datetime('now'), 'IMPORTING')", (task_id,))
             self.connection.commit()
-            all_headers: dict[str, str] = {}
+            file_columns = {}
             imported_rows = 0
             if not paths:
                 self.connection.execute("UPDATE import_task SET status='READY' WHERE task_id=?", (task_id,))
@@ -167,16 +252,9 @@ class ImportStore:
                     ws = wb[wb.sheetnames[0]]
                     header_row = find_header_row(ws)
                     header_values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))
-                    headers: list[str] = []
-                    display_headers: list[str] = []
-                    for index, value in enumerate(header_values):
-                        display = str(value).strip() if value is not None and str(value).strip() else f"未命名列{index + 1}"
-                        normalized = normalize_field(display) or f"未命名列{index + 1}"
-                        if normalized in headers:
-                            normalized = f"{normalized}_{index + 1}"
-                        headers.append(normalized)
-                        display_headers.append(display)
-                    put(("file", file_index, path.name, str(path), ws.title, header_row, headers, display_headers))
+                    columns = sheet_columns(header_values)
+                    headers = list(columns)
+                    put(("file", file_index, path.name, str(path), ws.title, header_row, columns))
                     row_batch: list[tuple[int, str]] = []
                     for row_number, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
                         if cancel_event and cancel_event.is_set():
@@ -212,14 +290,13 @@ class ImportStore:
                             message = batch_queue.get()
                             kind = message[0]
                             if kind == "file":
-                                _, file_index, file_name, file_path, sheet_name, header_row, headers, display_headers = message
+                                _, file_index, file_name, file_path, sheet_name, header_row, columns = message
                                 file_id = self.connection.execute(
                                     "INSERT INTO source_file(task_id, file_name, file_path, sheet_name, header_row) VALUES (?, ?, ?, ?, ?)",
                                     (task_id, file_name, file_path, sheet_name, header_row),
                                 ).lastrowid
                                 file_ids[file_index] = file_id
-                                for normalized, display in zip(headers, display_headers):
-                                    all_headers.setdefault(normalized, display)
+                                file_columns[file_index] = columns
                             elif kind == "batch":
                                 _, file_index, rows = message
                                 file_id = file_ids[file_index]
@@ -240,12 +317,16 @@ class ImportStore:
                                 raise message[2]
                         for future in futures:
                             future.result()
+                    all_headers = {}
+                    for index in sorted(file_columns):
+                        for key, display in file_columns[index].items():
+                            all_headers.setdefault(key, display)
                     self.connection.executemany(
                         "INSERT INTO source_column(task_id, display_name, normalized_name) VALUES (?, ?, ?)",
                         [(task_id, display, normalized) for normalized, display in all_headers.items()],
                     )
                     self.connection.execute("UPDATE import_task SET status='READY' WHERE task_id=?", (task_id,))
-                return task_id, [all_headers[key] for key in all_headers]
+                return task_id, list(field_choices(all_headers))
             except Exception:
                 self.connection.execute("DELETE FROM staging_row WHERE task_id=?", (task_id,))
                 self.connection.execute("DELETE FROM source_file WHERE task_id=?", (task_id,))
@@ -266,8 +347,19 @@ class ImportStore:
             for row_id, raw_json in cursor:
                 yield row_id, json.loads(raw_json)
 
+    def fields_for_task(self, task_id: str) -> dict[str, tuple[str, str]]:
+        with self._lock:
+            columns = self.connection.execute(
+                "SELECT normalized_name, display_name FROM source_column WHERE task_id=? ORDER BY rowid", (task_id,)
+            )
+            return field_choices(dict(columns))
+
     def distinct_date_values(self, task_id: str, year_field: str, month_field: str, day_field: str):
-        paths = tuple(json_path(normalize_field(field)) for field in (year_field, month_field, day_field))
+        fields = self.fields_for_task(task_id)
+        paths = tuple(
+            json_path(fields.get(field, (field, normalize_field(field)))[1])
+            for field in (year_field, month_field, day_field)
+        )
         with self._lock:
             cursor = self.connection.execute(
                 "SELECT DISTINCT json_extract(raw_json, ?), json_extract(raw_json, ?), json_extract(raw_json, ?) FROM staging_row WHERE task_id=?",
@@ -392,13 +484,32 @@ def export_task(
         day_field = None
     region_rules = region_rules or []
     default_date = datetime.now().strftime("%Y-%m-%d")
-    normalized_selected = [(field, normalize_field(field)) for field in selected_fields]
-    customer_key = normalize_field(customer_field)
+    choices = store.fields_for_task(task_id)
+
+    def lookup(label):
+        return choices.get(label, (label, normalize_field(label)))
+
+    # Pre-fix callers may still pass ["金额", "金额"]. Resolve those by
+    # occurrence using source_column, including its original legacy JSON keys.
+    original_columns = defaultdict(list)
+    for display, key in choices.values():
+        original_columns[display].append(key)
+    selected = []
+    occurrences = defaultdict(int)
+    for label in selected_fields:
+        display, key = lookup(label)
+        index = occurrences[label]
+        if index and index < len(original_columns[label]):
+            key = original_columns[label][index]
+        selected.append((display, key))
+        occurrences[label] += 1
+    output_headers = [display for display, _ in selected]
+    customer_key = lookup(customer_field)[1]
     customer_filter = {normalize_field(name) for name in (customer_names or []) if normalize_field(name)}
-    region_key = normalize_field(region_field) if region_field else None
-    year_key = normalize_field(year_field) if year_field else None
-    month_key = normalize_field(month_field) if month_field else None
-    day_key = normalize_field(day_field) if day_field else None
+    region_key = lookup(region_field)[1] if region_field else None
+    year_key = lookup(year_field)[1] if year_field else None
+    month_key = lookup(month_field)[1] if month_field else None
+    day_key = lookup(day_field)[1] if day_field else None
     selected_date_value = None
     selected_end_value = None
     if selected_date:
@@ -434,13 +545,10 @@ def export_task(
         nonlocal output_count
         if not current_workbook or not key:
             return
-        folder_date, region, customer = key
+        folder_date, region, _ = key
         target_dir = root / safe_filename(folder_date, default_date) / safe_filename(region, "未分区")
         target_dir.mkdir(parents=True, exist_ok=True)
-        suffix = "" if current_part == 1 else f"_part{current_part}"
-        target_file = target_dir / f"{safe_filename(customer, '未识别客户')}{suffix}.xlsx"
-        current_workbook.save(target_file)
-        current_workbook.close()
+        target_file = save_group_workbook(current_workbook, target_dir, key, current_part)
         output_count += 1
         if progress:
             progress(f"已生成 {target_file}")
@@ -504,18 +612,18 @@ def export_task(
                 workbook = Workbook(write_only=True)
                 worksheet = workbook.create_sheet("数据")
                 worksheet.freeze_panes = "A2"
-                worksheet.append(selected_fields)
+                worksheet.append(output_headers)
                 current_rows = 0
-            if current_rows >= 1_048_575:
+            if current_rows >= MAX_DATA_ROWS:
                 close_workbook(current_key, workbook, part_number)
                 part_number += 1
                 workbook = Workbook(write_only=True)
                 worksheet = workbook.create_sheet("数据")
                 worksheet.freeze_panes = "A2"
-                worksheet.append(selected_fields)
+                worksheet.append(output_headers)
                 current_rows = 0
             row = json.loads(raw_json)
-            worksheet.append([row.get(key_name) for _, key_name in normalized_selected])
+            worksheet.append([row.get(key_name) for _, key_name in selected])
             current_rows += 1
         close_workbook(current_key, workbook, part_number)
         connection.execute("DROP TABLE IF EXISTS temp.export_bucket")
