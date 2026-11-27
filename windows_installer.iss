@@ -1,7 +1,7 @@
 ﻿[Setup]
 AppId=ExcelCustomerSplitter
 AppName=客户 Excel 拆分工具
-AppVersion=1.0.2
+AppVersion=1.0.4
 DefaultDirName={autopf}\ExcelCustomerSplitter
 DisableDirPage=no
 PrivilegesRequired=lowest

@@ -1,8 +1,15 @@
 # 客户 Excel 拆分工具
 
-将多个 Excel 导入可持续追加的 DuckDB 数据库，按日期、分区和客户拆分导出。Windows x64 安装版双击 `ExcelCustomerSplitter-Setup-x64.exe`，先选择软件安装位置，再选择默认数据库目录，两者可以在不同的盘。安装包内含 Python、DuckDB、Excel 读写组件与运行库，支持离线安装和使用，电脑无需另装 Python 或 Microsoft Excel。安装完成后可以从开始菜单启动。便携版解压整个 ZIP 后双击“Excel客户拆分.exe”。运行文件、同目录的 `_internal` 和 JSON 配置需要放在一起。
+将多个 Excel 导入可持续追加的 DuckDB 数据库，按日期、分区和客户拆分导出。
 
-安装到 `C:\Program Files` 或其他盘受保护的目录时，先选“为所有用户安装”，再确认 Windows 的管理员授权。选择“仅为我安装”可以使用个人程序目录。安装版的数据库默认保存在当前使用者的 `%LOCALAPPDATA%\ExcelCustomerSplitter`，默认导出目录是其下的 `output`。也可以选择有写入权限的其他盘存放明细。
+## Windows x64 下载
+
+- 双击安装版 EXE，按向导选择软件安装位置和默认数据库目录，两者可以在不同的盘。安装完成后可从开始菜单启动。[下载安装版 EXE](https://github.com/a523959108-rgb/excel-customer-splitter/releases/download/v1.0.4/ExcelCustomerSplitter-Setup-x64.exe)
+- 将便携版 ZIP 完整解压到有写入权限的目录，双击“Excel客户拆分.exe”。请将程序、`_internal` 文件夹和 JSON 配置放在一起。[下载便携版 ZIP](https://github.com/a523959108-rgb/excel-customer-splitter/releases/download/v1.0.4/ExcelCustomerSplitter-windows-x64.zip)
+
+两个版本均内含 Python、DuckDB、Excel 读写组件和运行库，支持离线使用，无需另装 Microsoft Excel。[查看 v1.0.4 发布说明](https://github.com/a523959108-rgb/excel-customer-splitter/releases/tag/v1.0.4)
+
+安装到 `C:\Program Files` 或 `D:\Program Files` 等受保护的目录时，先选“为所有用户安装”，再确认 Windows 的管理员授权。选择“仅为我安装”可以使用个人程序目录。安装版默认将数据库保存在 `%LOCALAPPDATA%\ExcelCustomerSplitter`，将导出文件保存在其下的 `output` 文件夹。要将数据库放在其他盘，在数据库目录页取消勾选“使用各用户自己的本地数据目录”（若显示），再选择日常账户有写入权限的文件夹。
 
 ## 从导入到导出
 
@@ -60,4 +67,4 @@ python benchmark.py --rows 10000000 100000000
 
 Windows 虚拟机的千万行 Excel 全流程、亿行查询、并行解析和缓存对照见[独立压测报告](BENCHMARK_RESULTS.md)。
 
-使用 Windows x64 Python 运行 `build_windows.ps1`，脚本会执行单元测试、构建程序并自检最终 EXE。GitHub Actions 的 **Build Windows x64** 工作流可生成完整 ZIP 包。
+使用 Windows x64 Python 运行 `build_windows.ps1`，脚本会执行单元测试、构建程序并自检最终 EXE。GitHub Actions 的 **Build Windows x64** 工作流还会生成便携版 ZIP 和安装版 EXE，并验证安装、升级和卸载后的数据保留。
