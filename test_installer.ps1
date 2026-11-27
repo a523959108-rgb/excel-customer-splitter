@@ -36,6 +36,25 @@ function Start-AndCloseApp {
 }
 # Each install gets the real wizard; only the clicks are suppressed on the build runner.
 $quiet = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+# The build runner can normally write both locations. Deny file creation only in a test folder.
+$blocked = New-Item -ItemType Directory -Path (Join-Path $root '只读目录') -Force
+$acl = Get-Acl -LiteralPath $blocked.FullName
+$deny = [Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.WindowsIdentity]::GetCurrent().User, 'CreateFiles', 'Deny')
+$acl.AddAccessRule($deny)
+Set-Acl -LiteralPath $blocked.FullName -AclObject $acl
+foreach ($caption in @('软件目录', '数据库目录')) {
+    $installDir = if ($caption -eq '软件目录') { $blocked.FullName } else { $program }
+    $databaseDir = if ($caption -eq '数据库目录') { $blocked.FullName } else { $data }
+    $logFile = Join-Path $root "$caption.log"
+    $arguments = $quiet + "/DIR=`"$installDir`"" + "/DBDIR=`"$databaseDir`"" + "/LOG=`"$logFile`""
+    $process = Start-Process $setup -ArgumentList $arguments -PassThru
+    if (!$process.WaitForExit(30000)) { $process.Kill(); throw 'Folder permission check timed out.' }
+    if ($process.ExitCode -ne 7 -or !(Select-String -LiteralPath $logFile -SimpleMatch "当前账户无法在以下$caption" -Quiet)) {
+        throw "Setup did not identify the inaccessible folder: $caption (exit $($process.ExitCode))."
+    }
+    if (Test-Path $exe) { throw 'Setup copied the program before checking both folder permissions.' }
+}
 Invoke-Setup $setup ($quiet + "/DIR=`"$program`"" + "/DBDIR=`"$data`"")
 if (!(Test-Path $exe)) { throw 'Wrong application directory.' }
 $rule = New-NetFirewallRule -DisplayName ("Splitter offline test " + [guid]::NewGuid()) -Program $exe -Direction Outbound -Action Block -Profile Any
