@@ -26,3 +26,8 @@ python-*.exe
 python-*.zip
 sample_builder.mjs
 windows_ui*.png
+
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp/
+.split-import-*/

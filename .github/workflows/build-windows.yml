@@ -31,17 +31,33 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path release -Force | Out-Null
-          Copy-Item 'dist/Excel客户拆分.exe' 'release/Excel客户拆分.exe'
-          Copy-Item regions.json release/regions.json
-          if (Test-Path customer_config.json) {
-            Copy-Item customer_config.json release/customer_config.json
-          }
+          Copy-Item 'dist/Excel客户拆分/*' release -Recurse -Force
           Copy-Item README.md release/README.md
-          Compress-Archive -Path release/* -DestinationPath 'ExcelCustomerSplitter-windows-x64.zip' -Force
+          python -c "import shutil; shutil.make_archive('ExcelCustomerSplitter-windows-x64', 'zip', 'release')"
 
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
           name: ExcelCustomerSplitter-windows-x64
           path: ExcelCustomerSplitter-windows-x64.zip
+          if-no-files-found: error
+
+      - name: Build Chinese setup wizard
+        shell: pwsh
+        run: |
+          if (!(Test-Path (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'))) {
+            choco install innosetup --version=6.6.1 --yes --no-progress
+            if ($LASTEXITCODE) { throw "Inno Setup installation failed." }
+          }
+          .\build_installer.ps1
+
+      - name: Verify install, upgrade and uninstall
+        shell: pwsh
+        run: .\test_installer.ps1
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: ExcelCustomerSplitter-Setup-x64
+          path: dist/installer/ExcelCustomerSplitter-Setup-x64.exe
           if-no-files-found: error
