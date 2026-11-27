@@ -35,7 +35,7 @@ function Start-AndCloseApp {
     if ((Get-Content -Encoding utf8 -Raw $settings | ConvertFrom-Json).database -ne $db) { throw 'Wrong active database.' }
 }
 # Each install gets the real wizard; only the clicks are suppressed on the build runner.
-$quiet = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+$quiet = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER')
 # The build runner can normally write both locations. Deny file creation only in a test folder.
 $blocked = New-Item -ItemType Directory -Path (Join-Path $root '只读目录') -Force
 $acl = Get-Acl -LiteralPath $blocked.FullName
@@ -85,4 +85,26 @@ if (!(Test-Path $db)) { throw 'Uninstall removed the database.' }
 & python -c "import duckdb,sys; c=duckdb.connect(sys.argv[1],read_only=True); assert c.execute('SELECT id FROM install_probe').fetchall()==[(123,)]; c.close()" $db
 if ($LASTEXITCODE) { throw 'Stored data changed during upgrade or uninstall.' }
 Write-Host 'Verified custom program and database locations, first launch, upgrade and data retention after uninstall.'
+$program = Join-Path $env:ProgramFiles ("ExcelCustomerSplitter-test-" + [guid]::NewGuid())
+$exe = Join-Path $program 'Excel客户拆分.exe'
+$allUsers = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/ALLUSERS')
+$testProfile = Join-Path $root 'machine-install-user'
+$settings = Join-Path $testProfile 'ExcelCustomerSplitter\settings.json'
+$db = Join-Path $testProfile 'ExcelCustomerSplitter\splitter.duckdb'
+Invoke-Setup $setup ($allUsers + "/DIR=`"$program`"")
+try {
+    if (!(Test-Path $exe) -or !(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\ExcelCustomerSplitter_is1')) {
+        throw 'Machine-wide installation in Program Files failed.'
+    }
+    Start-AndCloseApp
+    $customDb = Join-Path $root "第二个盘的模拟目录 O'Brien"
+    Invoke-Setup $setup ($allUsers + "/DIR=`"$program`"" + "/DBDIR=`"$customDb`"")
+    if (!(Test-Path $customDb) -or (Get-Content -Encoding utf8 -Raw (Join-Path $program 'database-directory.txt')).Trim() -ne $customDb) {
+        throw 'All-users installer did not prepare the selected custom database directory.'
+    }
+} finally {
+    Invoke-Setup (Join-Path $program 'unins000.exe') @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART')
+}
+if (!(Test-Path $db)) { throw 'All-users uninstall removed the user database.' }
+Write-Host 'Verified installation into Program Files, per-user database default and custom database location.'
 Remove-Item -LiteralPath $root -Recurse -Force

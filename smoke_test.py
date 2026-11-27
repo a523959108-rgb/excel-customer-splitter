@@ -71,7 +71,9 @@ def run(app_type):
                     raise ValueError("Saved database or calendar did not reopen")
                 if app.import_panel.winfo_manager():
                     raise ValueError("Existing database should open in the export view")
-                app.output_var.set(str(root / "output"))
+                default_output = Path(app.output_var.get())
+                if default_output != profile / "output":
+                    raise ValueError("The installed app should export to the user's writable folder")
                 config = root / "customers.json"
                 config.write_text('{"customers": ["甲", "乙"]}', encoding="utf-8")
                 with patch("tkinter.filedialog.askopenfilename", return_value=str(config)):
@@ -79,7 +81,7 @@ def run(app_type):
                 app.run_button.invoke()
                 settle(app)
                 contents = []
-                for file in (root / "output").rglob("*.xlsx"):
+                for file in default_output.rglob("*.xlsx"):
                     book = load_workbook(file, read_only=True, data_only=True)
                     try:
                         contents.extend(list(book.active.values)[1:])

@@ -659,6 +659,8 @@ class SplitterApp(tk.Tk):
 
         self.data_dir = Path(data_dir)
         self.default_database_dir = self.data_dir
+        default_location = Path(install_dir) / "database-directory.txt"
+        self.default_output_dir = (self.data_dir if default_location.is_file() else Path(install_dir)) / "output"
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.settings = self.data_dir / "settings.json"
         self.store = None
@@ -673,12 +675,13 @@ class SplitterApp(tk.Tk):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
         try:
-            default_location = Path(install_dir) / "database-directory.txt"
             if default_location.is_file():
-                location = Path(default_location.read_text(encoding="utf-8-sig").rstrip("\r\n"))
-                if not location.is_absolute():
-                    raise ValueError("安装配置中的数据库目录必须为完整路径")
-                self.default_database_dir = location
+                configured = default_location.read_text(encoding="utf-8-sig").rstrip("\r\n")
+                if configured:
+                    location = Path(configured)
+                    if not location.is_absolute():
+                        raise ValueError("安装配置中的数据库目录必须为完整路径")
+                    self.default_database_dir = location
             if self.settings.exists():
                 path = Path(json.loads(self.settings.read_text(encoding="utf-8"))["database"])
                 self.open_store(path, existing=True)
@@ -929,7 +932,7 @@ class SplitterApp(tk.Tk):
         self.db_meta_var = tk.StringVar(value="请打开或新建库")
         self.db_path_full = ""
         self.status_var = tk.StringVar(value="就绪")
-        self.output_var = tk.StringVar(value=str(BASE_DIR / "output"))
+        self.output_var = tk.StringVar(value=str(self.default_output_dir))
         self.customer_config_var = tk.StringVar(value=str(CUSTOMER_CONFIG))
         self.region_path_var = tk.StringVar(value=str(REGION_CONFIG))
         self.customer_var = tk.StringVar()
@@ -1462,7 +1465,7 @@ class SplitterApp(tk.Tk):
         self.log.configure(state="disabled")
 
     def open_output_dir(self):
-        target = Path(self.output_var.get().strip() or (BASE_DIR / "output"))
+        target = Path(self.output_var.get().strip() or self.default_output_dir)
         try:
             open_in_file_manager(target)
         except Exception as exc:
